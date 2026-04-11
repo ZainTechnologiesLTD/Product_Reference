@@ -1,0 +1,296 @@
+import { useState, useMemo, useCallback } from "react";
+import type { SortingState } from "@tanstack/react-table";
+import type { Product } from "../../../../drizzle/schema";
+import { trpc } from "@/lib/trpc";
+import { DataTable } from "@/components/DataTable";
+import { getProductColumns } from "./columns";
+import { ProductFormDialog } from "./ProductFormDialog";
+import { useDebounce } from "@/hooks/useDebounce";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Plus, Search, Download, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { keepPreviousData } from "@tanstack/react-query";
+
+export default function ProductsPage() {
+  // Pagination & sorting state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [sorting, setSorting] = useState<SortingState>([
+    { id: "createdAt", desc: true },
+  ]);
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<string>("");
+  const debouncedSearch = useDebounce(search, 300);
+
+  // Dialog state
+  const [formOpen, setFormOpen] = useState(false);
+  const [editProduct, setEditProduct] = useState<Product | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
+
+  // Row selection
+  const [rowSelection, setRowSelection] = useState<Record<string, boolean>>({});
+
+  const utils = trpc.useUtils();
+
+  // Build query params
+  const queryParams = useMemo(
+    () => ({
+      page,
+      pageSize,
+      sortBy: (sorting[0]?.id ?? "createdAt") as any,
+      sortOrder: (sorting[0]?.desc ? "desc" : "asc") as "asc" | "desc",
+      search: debouncedSearch || undefined,
+      category: categoryFilter || undefined,
+      status: statusFilter as any || undefined,
+    }),
+    [page, pageSize, sorting, debouncedSearch, categoryFilter, statusFilter]
+  );
+
+  const { data, isLoading } = trpc.products.list.useQuery(queryParams, {
+    placeholderData: keepPreviousData,
+  });
+
+  const createMutation = trpc.products.create.useMutation({
+    onSuccess: () => {
+      utils.products.list.invalidate();
+      toast.success("Product created successfully");
+      setFormOpen(false);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const updateMutation = trpc.products.update.useMutation({
+    onSuccess: () => {
+      utils.products.list.invalidate();
+      toast.success("Product updated successfully");
+      setFormOpen(false);
+      setEditProduct(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const deleteMutation = trpc.products.delete.useMutation({
+    onSuccess: () => {
+      utils.products.list.invalidate();
+      toast.success("Product deleted");
+      setDeleteTarget(null);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const bulkDeleteMutation = trpc.products.bulkDelete.useMutation({
+    onSuccess: (data) => {
+      utils.products.list.invalidate();
+      toast.success(`${data.deleted} products deleted`);
+      setRowSelection({});
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
+  const columns = useMemo(
+    () =>
+      getProductColumns({
+        onEdit: (product) => {
+          setEditProduct(product);
+          setFormOpen(true);
+        },
+        onDuplicate: (product) => {
+          setEditProduct(null);
+          setFormOpen(true);
+          // Pre-fill will be handled via form defaults
+        },
+        onDelete: (product) => setDeleteTarget(product),
+      }),
+    []
+  );
+
+  const handleFormSubmit = useCallback(
+    async (values: any) => {
+      const tags = values.tags
+        ? values.tags
+            .split(",")
+            .map((t: string) => t.trim())
+            .filter(Boolean)
+        : undefined;
+
+      if (editProduct) {
+        await updateMutation.mutateAsync({
+          id: editProduct.id,
+          ...values,
+          tags,
+        });
+      } else {
+        await createMutation.mutateAsync({ ...values, tags });
+      }
+    },
+    [editProduct, createMutation, updateMutation]
+  );
+
+  const selectedIds = Object.keys(rowSelection).map(Number);
+
+  const handleExport = useCallback(() => {
+    if (!data?.items.length) return;
+    const items = data.items;
+
+    const csvHeader = "Name,Category,Reference,SKU,Price,Status,Description\n";
+    const csvRows = items
+      .map(
+        (p) =>
+          `"${p.name}","${p.category}","${p.reference}","${p.sku ?? ""}","${p.price ?? ""}","${p.status}","${(p.description ?? "").replace(/"/g, '""')}"`
+      )
+      .join("\n");
+
+    const blob = new Blob([csvHeader + csvRows], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `products_${new Date().toISOString().split("T")[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Export downloaded");
+  }, [data]);
+
+  return (
+    <div className="space-y-6">
+      {/* Toolbar */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-1 items-center gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search products..."
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              className="pl-9"
+            />
+          </div>
+          <Select
+            value={statusFilter}
+            onValueChange={(v) => {
+              setStatusFilter(v === "all" ? "" : v);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger className="w-[140px]">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Status</SelectItem>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
+              <SelectItem value="discontinued">Discontinued</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedIds.length > 0 && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => bulkDeleteMutation.mutate({ ids: selectedIds })}
+              disabled={bulkDeleteMutation.isPending}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete ({selectedIds.length})
+            </Button>
+          )}
+          <Button variant="outline" size="sm" onClick={handleExport}>
+            <Download className="mr-2 h-4 w-4" />
+            Export CSV
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => {
+              setEditProduct(null);
+              setFormOpen(true);
+            }}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            Add Product
+          </Button>
+        </div>
+      </div>
+
+      {/* Data Table */}
+      <DataTable
+        columns={columns}
+        data={data?.items ?? []}
+        total={data?.total ?? 0}
+        page={data?.page ?? 1}
+        pageSize={data?.pageSize ?? pageSize}
+        totalPages={data?.totalPages ?? 0}
+        sorting={sorting}
+        onSortingChange={(s) => {
+          setSorting(s);
+          setPage(1);
+        }}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+        rowSelection={rowSelection}
+        onRowSelectionChange={setRowSelection}
+        isLoading={isLoading}
+      />
+
+      {/* Product Form Dialog */}
+      <ProductFormDialog
+        open={formOpen}
+        onOpenChange={(open) => {
+          setFormOpen(open);
+          if (!open) setEditProduct(null);
+        }}
+        product={editProduct}
+        onSubmit={handleFormSubmit}
+        isSubmitting={createMutation.isPending || updateMutation.isPending}
+      />
+
+      {/* Delete Confirmation */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Product</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete &quot;{deleteTarget?.name}&quot;? This
+              action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() =>
+                deleteTarget && deleteMutation.mutate({ id: deleteTarget.id })
+              }
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
