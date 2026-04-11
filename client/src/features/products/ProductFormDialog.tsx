@@ -31,7 +31,7 @@ import { Loader2 } from "lucide-react";
 const productFormSchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
   category: z.string().min(1, "Category is required").max(100),
-  reference: z.string().min(1, "Reference is required").max(50),
+  reference: z.string().max(50).optional().or(z.literal("")),
   sku: z.string().max(50).optional().or(z.literal("")),
   description: z.string().max(5000).optional().or(z.literal("")),
   price: z.string().optional().or(z.literal("")),
