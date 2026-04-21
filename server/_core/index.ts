@@ -67,6 +67,21 @@ async function startServer() {
 
   app.use("/api/auth", authLimiter);
   app.use("/api/trpc", apiLimiter);
+  app.use("/api/trpc", (req, res, next) => {
+    const start = Date.now();
+    res.on("finish", () => {
+      logger.info(
+        {
+          path: req.originalUrl,
+          method: req.method,
+          status: res.statusCode,
+          durationMs: Date.now() - start,
+        },
+        "tRPC request completed"
+      );
+    });
+    next();
+  });
 
   // Health check
   app.get("/api/health", async (_req, res) => {

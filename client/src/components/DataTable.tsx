@@ -1,6 +1,6 @@
+import { useState } from "react";
 import {
   type ColumnDef,
-  type ColumnFiltersState,
   type SortingState,
   type VisibilityState,
   flexRender,
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Columns3 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
@@ -39,6 +40,7 @@ interface DataTableProps<TData, TValue> {
   rowSelection?: Record<string, boolean>;
   onRowSelectionChange?: (selection: Record<string, boolean>) => void;
   isLoading?: boolean;
+  getRowClassName?: (row: TData) => string | undefined;
 }
 
 export function DataTable<TData, TValue>({
@@ -55,8 +57,11 @@ export function DataTable<TData, TValue>({
   rowSelection = {},
   onRowSelectionChange,
   isLoading,
+  getRowClassName,
 }: DataTableProps<TData, TValue>) {
-  const columnVisibility: VisibilityState = {};
+  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(
+    {}
+  );
 
   const table = useReactTable({
     data,
@@ -65,6 +70,7 @@ export function DataTable<TData, TValue>({
     manualSorting: true,
     manualPagination: true,
     pageCount: totalPages,
+    onColumnVisibilityChange: setColumnVisibility,
     state: {
       sorting,
       columnVisibility,
@@ -83,7 +89,7 @@ export function DataTable<TData, TValue>({
         }
       : undefined,
     enableRowSelection: !!onRowSelectionChange,
-    getRowId: (row: any) => String(row.id),
+    getRowId: row => String((row as { id: number }).id),
   });
 
   return (
@@ -150,6 +156,7 @@ export function DataTable<TData, TValue>({
                 <TableRow
                   key={row.id}
                   data-state={row.getIsSelected() && "selected"}
+                  className={cn(getRowClassName?.(row.original))}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
@@ -181,7 +188,9 @@ export function DataTable<TData, TValue>({
             </span>
           )}
           {(!onRowSelectionChange || Object.keys(rowSelection).length === 0) && (
-            <span>{total} row(s) total.</span>
+            <span>
+              Showing {data.length} of {total} product{total === 1 ? "" : "s"}
+            </span>
           )}
         </div>
         <div className="flex items-center space-x-6 lg:space-x-8">

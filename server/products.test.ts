@@ -2,7 +2,6 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { appRouter } from "./routers";
 import type { TrpcContext } from "./_core/context";
 
-// Mock user context (matches new schema: no openId, loginMethod, lastSignedIn)
 const mockUser = {
   id: 1,
   username: "testuser",
@@ -23,7 +22,9 @@ const mockAdminUser = {
   updatedAt: new Date(),
 };
 
-function createMockContext(user: typeof mockUser | null = mockUser): TrpcContext {
+function createMockContext(
+  user: typeof mockUser | null = mockUser
+): TrpcContext {
   return {
     user,
     req: {
@@ -38,11 +39,13 @@ function createMockContext(user: typeof mockUser | null = mockUser): TrpcContext
   };
 }
 
-// Helper to generate unique IDs
 let testCounter = 0;
 function getUniqueId() {
   return ++testCounter;
 }
+
+/** Integration tests need MySQL + migrations (incl. nameNormalized). */
+const hasDb = Boolean(process.env.DATABASE_URL?.trim());
 
 describe("Products Router", () => {
   let caller: ReturnType<typeof appRouter.createCaller>;
@@ -73,19 +76,19 @@ describe("Products Router", () => {
     });
   });
 
-  describe("products.create", () => {
-    it("should create a product with valid input", async () => {
+  describe.skipIf(!hasDb)("products.create", () => {
+    it("should create a product with valid input and server reference", async () => {
       const id = getUniqueId();
       const result = await caller.products.create({
         name: `Test Product ${id}`,
         category: "Electronics",
-        reference: `EL${id}`,
       });
 
       expect(result).toBeDefined();
       expect(result.name).toBe(`Test Product ${id}`);
       expect(result.category).toBe("Electronics");
-      expect(result.reference).toBe(`EL${id}`);
+      expect(result.reference).toMatch(/^[A-Z]{2}\d{3}$/);
+      expect(result.reference.slice(0, 2)).toBe("EL");
       expect(result.userId).toBe(mockUser.id);
     });
 
@@ -94,7 +97,6 @@ describe("Products Router", () => {
         await caller.products.create({
           name: "",
           category: "Electronics",
-          reference: `EL${getUniqueId()}`,
         });
         expect.fail("Should have thrown an error");
       } catch (error: any) {
@@ -107,7 +109,6 @@ describe("Products Router", () => {
         await caller.products.create({
           name: `Valid Name ${getUniqueId()}`,
           category: "",
-          reference: `EL${getUniqueId()}`,
         });
         expect.fail("Should have thrown an error");
       } catch (error: any) {
@@ -119,24 +120,38 @@ describe("Products Router", () => {
       const id = getUniqueId();
       const uniqueName = `Unique Product ${id}`;
 
-      // Create first product
       await caller.products.create({
         name: uniqueName,
         category: "Electronics",
-        reference: `EL${id}`,
       });
 
-      // Try to create duplicate
       try {
         await caller.products.create({
           name: uniqueName,
           category: "Different Category",
-          reference: `EL${id + 1000}`,
         });
         expect.fail("Should have thrown an error");
       } catch (error: any) {
         expect(error.code).toBe("CONFLICT");
         expect(error.message).toContain("already exists");
+      }
+    });
+
+    it("should reject duplicate names case-insensitively", async () => {
+      const id = getUniqueId();
+      const name = `Case Dup ${id}`;
+      await caller.products.create({
+        name,
+        category: "Test",
+      });
+      try {
+        await caller.products.create({
+          name: name.toUpperCase(),
+          category: "Other",
+        });
+        expect.fail("Should have thrown");
+      } catch (error: any) {
+        expect(error.code).toBe("CONFLICT");
       }
     });
 
@@ -146,7 +161,6 @@ describe("Products Router", () => {
         await unauthedCaller.products.create({
           name: `Test ${getUniqueId()}`,
           category: "Test",
-          reference: `TEST${getUniqueId()}`,
         });
         expect.fail("Should have thrown an error");
       } catch (error: any) {
@@ -155,13 +169,27 @@ describe("Products Router", () => {
     });
   });
 
-  describe("products.getById", () => {
+  describe.skipIf(!hasDb)("products.checkDuplicate", () => {
+    it("returns row metadata for existing name", async () => {
+      const id = getUniqueId();
+      const name = `DupMeta ${id}`;
+      await caller.products.create({ name, category: "Cat" });
+      const d = await caller.products.checkDuplicate({
+        name: name.toLowerCase(),
+      });
+      expect(d.exists).toBe(true);
+      expect(d.productId).toBeDefined();
+      expect(d.reference).toMatch(/^[A-Z]{2}\d{3}$/);
+      expect(d.rowNumber).toBeGreaterThan(0);
+    });
+  });
+
+  describe.skipIf(!hasDb)("products.getById", () => {
     it("should get product by id", async () => {
       const id = getUniqueId();
       const created = await caller.products.create({
         name: `Get By ID Test ${id}`,
         category: "Test",
-        reference: `TEST${id}`,
       });
 
       const result = await caller.products.getById({ id: created.id });
@@ -179,7 +207,6 @@ describe("Products Router", () => {
       const created = await caller.products.create({
         name: `User 1 Product ${id}`,
         category: "Test",
-        reference: `TEST${id}`,
       });
 
       const otherUserCaller = appRouter.createCaller(
@@ -190,13 +217,12 @@ describe("Products Router", () => {
     });
   });
 
-  describe("products.update", () => {
+  describe.skipIf(!hasDb)("products.update", () => {
     it("should update product name", async () => {
       const id = getUniqueId();
       const created = await caller.products.create({
         name: `Original Name ${id}`,
         category: "Test",
-        reference: `TEST${id}`,
       });
 
       const updated = await caller.products.update({
@@ -213,7 +239,6 @@ describe("Products Router", () => {
       const created = await caller.products.create({
         name: `Category Test ${id}`,
         category: "Original",
-        reference: `TEST${id}`,
       });
 
       const updated = await caller.products.update({
@@ -238,20 +263,16 @@ describe("Products Router", () => {
 
     it("should prevent duplicate names on update", async () => {
       const id = getUniqueId();
-      // Create two products
       const product1 = await caller.products.create({
         name: `Product A ${id}`,
         category: "Test",
-        reference: `TEST${id}`,
       });
 
       await caller.products.create({
         name: `Product B ${id}`,
         category: "Test",
-        reference: `TEST${id + 1000}`,
       });
 
-      // Try to rename product1 to product2's name
       try {
         await caller.products.update({
           id: product1.id,
@@ -264,19 +285,17 @@ describe("Products Router", () => {
     });
   });
 
-  describe("products.delete", () => {
-    it("should delete product", async () => {
+  describe.skipIf(!hasDb)("products.delete", () => {
+    it("should soft-delete product", async () => {
       const id = getUniqueId();
       const created = await caller.products.create({
         name: `Delete Test ${id}`,
         category: "Test",
-        reference: `TEST${id}`,
       });
 
       const result = await caller.products.delete({ id: created.id });
       expect(result.success).toBe(true);
 
-      // Verify deletion
       const fetched = await caller.products.getById({ id: created.id });
       expect(fetched).toBeNull();
     });
@@ -295,7 +314,6 @@ describe("Products Router", () => {
       const created = await caller.products.create({
         name: `User 1 Product Delete ${id}`,
         category: "Test",
-        reference: `TEST${id}`,
       });
 
       const otherUserCaller = appRouter.createCaller(
@@ -309,13 +327,12 @@ describe("Products Router", () => {
         expect(error.code).toBe("NOT_FOUND");
       }
 
-      // Verify original user can still access
       const fetched = await caller.products.getById({ id: created.id });
       expect(fetched).toBeDefined();
     });
   });
 
-  describe("Data Isolation", () => {
+  describe.skipIf(!hasDb)("Data Isolation", () => {
     it("should isolate products between users", async () => {
       const id = getUniqueId();
       const user1Caller = appRouter.createCaller(createMockContext(mockUser));
@@ -323,29 +340,23 @@ describe("Products Router", () => {
         createMockContext(mockAdminUser)
       );
 
-      // User 1 creates product
       const user1Product = await user1Caller.products.create({
         name: `User 1 Only ${id}`,
         category: "Test",
-        reference: `TEST${id}`,
       });
 
-      // User 2 creates product
       const user2Product = await user2Caller.products.create({
         name: `User 2 Only ${id}`,
         category: "Test",
-        reference: `TEST${id + 1000}`,
       });
 
-      // User 1 should only see their product
       const user1List = await user1Caller.products.list();
-      const user1Ids = user1List.map((p) => p.id);
+      const user1Ids = user1List.items.map(p => p.id);
       expect(user1Ids).toContain(user1Product.id);
       expect(user1Ids).not.toContain(user2Product.id);
 
-      // User 2 should only see their product
       const user2List = await user2Caller.products.list();
-      const user2Ids = user2List.map((p) => p.id);
+      const user2Ids = user2List.items.map(p => p.id);
       expect(user2Ids).toContain(user2Product.id);
       expect(user2Ids).not.toContain(user1Product.id);
     });

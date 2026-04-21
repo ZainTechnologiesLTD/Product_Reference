@@ -1,4 +1,4 @@
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import type { Product } from "../../../../drizzle/schema";
@@ -26,12 +26,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2 } from "lucide-react";
+import { ProductNameInput } from "@/components/ProductNameInput";
+import { CategoryCombobox } from "@/components/CategoryCombobox";
+import { useState, useEffect } from "react";
+import { Loader2, Sparkles } from "lucide-react";
+import { previewReferenceCode } from "@shared/referencePreview";
 
 const productFormSchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
   category: z.string().min(1, "Category is required").max(100),
-  reference: z.string().max(50).optional().or(z.literal("")),
+  reference: z.string().max(5).optional().or(z.literal("")),
   sku: z.string().max(50).optional().or(z.literal("")),
   description: z.string().max(5000).optional().or(z.literal("")),
   price: z.string().optional().or(z.literal("")),
@@ -39,7 +43,7 @@ const productFormSchema = z.object({
   tags: z.string().optional(),
 });
 
-type ProductFormValues = z.infer<typeof productFormSchema>;
+export type ProductFormValues = z.infer<typeof productFormSchema>;
 
 interface ProductFormDialogProps {
   open: boolean;
@@ -47,12 +51,8 @@ interface ProductFormDialogProps {
   product?: Product | null;
   onSubmit: (values: ProductFormValues) => Promise<void>;
   isSubmitting?: boolean;
-}
-
-function generateReference(category: string): string {
-  const prefix = category.substring(0, 2).toUpperCase();
-  const numbers = Math.floor(Math.random() * 900) + 100;
-  return `${prefix}${numbers}`;
+  onDuplicateRow?: (productId: number | null) => void;
+  onAutofillRow?: (productId: number | null) => void;
 }
 
 export function ProductFormDialog({
@@ -61,8 +61,11 @@ export function ProductFormDialog({
   product,
   onSubmit,
   isSubmitting,
+  onDuplicateRow,
+  onAutofillRow,
 }: ProductFormDialogProps) {
   const isEdit = !!product;
+  const [autofillBadge, setAutofillBadge] = useState(false);
 
   const form = useForm<ProductFormValues>({
     resolver: zodResolver(productFormSchema),
@@ -89,18 +92,78 @@ export function ProductFormDialog({
         },
   });
 
-  const handleSubmit = form.handleSubmit(async (values) => {
-    if (!values.reference) {
-      values.reference = generateReference(values.category);
+  const categoryWatch = useWatch({ control: form.control, name: "category" });
+
+  useEffect(() => {
+    if (!open || isEdit) return;
+    if (categoryWatch?.trim()) {
+      form.setValue("reference", previewReferenceCode(categoryWatch));
     }
+  }, [categoryWatch, isEdit, open, form]);
+
+  // Reset form when opening for create vs edit (controlled dialog + different product).
+  useEffect(() => {
+    if (!open) return;
+    if (product) {
+      form.reset({
+        name: product.name,
+        category: product.category,
+        reference: product.reference,
+        sku: product.sku ?? "",
+        description: product.description ?? "",
+        price: product.price ?? "",
+        status: product.status,
+        tags: product.tags?.join(", ") ?? "",
+      });
+    } else {
+      form.reset({
+        name: "",
+        category: "",
+        reference: "",
+        sku: "",
+        description: "",
+        price: "",
+        status: "active",
+        tags: "",
+      });
+    }
+  }, [open, product, form]);
+
+  const handleSuggestion = (suggestion: {
+    id: number;
+    name: string;
+    category: string;
+    reference: string;
+  }) => {
+    setAutofillBadge(true);
+    onAutofillRow?.(suggestion.id);
+    form.setValue("category", suggestion.category);
+    form.setValue("reference", suggestion.reference);
+  };
+
+  const handleSubmit = form.handleSubmit(async values => {
     await onSubmit(values);
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={v => {
+        if (!v) setAutofillBadge(false);
+        onOpenChange(v);
+      }}
+    >
       <DialogContent className="sm:max-w-[525px]" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Product" : "Add Product"}</DialogTitle>
+          <DialogTitle>
+            {isEdit ? "Edit Product" : "Add Product"}
+            {autofillBadge && !isEdit && (
+              <span className="ml-2 text-xs text-amber-500 flex items-center gap-1">
+                <Sparkles className="h-3 w-3" />
+                Autofilled from existing product
+              </span>
+            )}
+          </DialogTitle>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -112,7 +175,19 @@ export function ProductFormDialog({
                   <FormItem className="col-span-2">
                     <FormLabel>Name</FormLabel>
                     <FormControl>
-                      <Input placeholder="Product name" {...field} />
+                      <ProductNameInput
+                        value={field.value}
+                        onChange={v => {
+                          field.onChange(v);
+                          if (!v) setAutofillBadge(false);
+                        }}
+                        onSelectSuggestion={handleSuggestion}
+                        onDuplicateRow={info =>
+                          onDuplicateRow?.(info?.productId ?? null)
+                        }
+                        excludeId={product?.id}
+                        error={form.formState.errors.name?.message}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -125,7 +200,11 @@ export function ProductFormDialog({
                   <FormItem>
                     <FormLabel>Category</FormLabel>
                     <FormControl>
-                      <Input placeholder="Category" {...field} />
+                      <CategoryCombobox
+                        value={field.value}
+                        onChange={field.onChange}
+                        error={form.formState.errors.category?.message}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -138,8 +217,21 @@ export function ProductFormDialog({
                   <FormItem>
                     <FormLabel>Reference</FormLabel>
                     <FormControl>
-                      <Input placeholder="Auto-generated" {...field} />
+                      <Input
+                        placeholder={
+                          isEdit ? undefined : "Preview — assigned on save"
+                        }
+                        {...field}
+                        disabled={isEdit}
+                        readOnly={!isEdit}
+                        className={isEdit ? "bg-muted" : "bg-muted/50"}
+                      />
                     </FormControl>
+                    <p className="text-xs text-muted-foreground">
+                      {isEdit
+                        ? "Reference is permanent."
+                        : "Shown for convenience; the server assigns a unique code on create."}
+                    </p>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -182,7 +274,10 @@ export function ProductFormDialog({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Status</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    >
                       <FormControl>
                         <SelectTrigger>
                           <SelectValue placeholder="Select status" />
@@ -191,7 +286,9 @@ export function ProductFormDialog({
                       <SelectContent>
                         <SelectItem value="active">Active</SelectItem>
                         <SelectItem value="inactive">Inactive</SelectItem>
-                        <SelectItem value="discontinued">Discontinued</SelectItem>
+                        <SelectItem value="discontinued">
+                          Discontinued
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -218,7 +315,10 @@ export function ProductFormDialog({
                   <FormItem className="col-span-2">
                     <FormLabel>Description</FormLabel>
                     <FormControl>
-                      <Input placeholder="Product description (optional)" {...field} />
+                      <Input
+                        placeholder="Product description (optional)"
+                        {...field}
+                      />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -229,12 +329,17 @@ export function ProductFormDialog({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => onOpenChange(false)}
+                onClick={() => {
+                  setAutofillBadge(false);
+                  onOpenChange(false);
+                }}
               >
                 Cancel
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {isSubmitting && (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                )}
                 {isEdit ? "Save Changes" : "Add Product"}
               </Button>
             </DialogFooter>

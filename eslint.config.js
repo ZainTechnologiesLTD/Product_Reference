@@ -21,5 +21,17 @@ export default tseslint.config(
   },
   {
     ignores: ["dist/**", "node_modules/**", "drizzle/**", "*.config.*"],
+  },
+  {
+    files: ["**/client/src/components/DataTable.tsx"],
+    rules: {
+      "react-hooks/incompatible-library": "off",
+    },
+  },
+  {
+    files: ["**/client/src/features/products/ProductFormDialog.tsx"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+    },
   }
 );

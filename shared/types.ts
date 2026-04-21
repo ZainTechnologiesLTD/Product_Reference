@@ -3,5 +3,13 @@
  * Import shared types from this single entry point.
  */
 
-export type * from "../drizzle/schema";
-export * from "./_core/errors";
+export type {
+  User,
+  InsertUser,
+  Session,
+  Category,
+  InsertCategory,
+  Product,
+  InsertProduct,
+  AuditLog,
+} from "../drizzle/schema";

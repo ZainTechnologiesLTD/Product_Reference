@@ -9,20 +9,41 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowUpDown, MoreHorizontal, Pencil, Copy, Trash2 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ArrowUpDown,
+  MoreHorizontal,
+  Pencil,
+  Copy,
+  Trash2,
+} from "lucide-react";
 import { getSelectColumn } from "@/components/DataTable";
+import { highlightText } from "@/lib/highlightText";
+import { format } from "date-fns";
 
-const statusVariant: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
+const statusVariant: Record<
+  string,
+  "default" | "secondary" | "destructive" | "outline"
+> = {
   active: "default",
   inactive: "secondary",
   discontinued: "destructive",
 };
 
-export function getProductColumns(actions: {
-  onEdit: (product: Product) => void;
-  onDuplicate: (product: Product) => void;
-  onDelete: (product: Product) => void;
-}): ColumnDef<Product, unknown>[] {
+export function getProductColumns(
+  actions: {
+    onEdit: (product: Product) => void;
+    onDuplicate: (product: Product) => void;
+    onDelete: (product: Product) => void;
+  },
+  options?: { searchQuery?: string }
+): ColumnDef<Product, unknown>[] {
+  const q = options?.searchQuery?.trim() ?? "";
+
   return [
     getSelectColumn<Product>(),
     {
@@ -37,7 +58,9 @@ export function getProductColumns(actions: {
         </Button>
       ),
       cell: ({ row }) => (
-        <div className="font-medium">{row.getValue("name")}</div>
+        <div className="font-medium">
+          {highlightText(String(row.getValue("name")), q)}
+        </div>
       ),
     },
     {
@@ -52,7 +75,9 @@ export function getProductColumns(actions: {
         </Button>
       ),
       cell: ({ row }) => (
-        <Badge variant="outline">{row.getValue("category")}</Badge>
+        <Badge variant="outline">
+          {highlightText(String(row.getValue("category")), q)}
+        </Badge>
       ),
     },
     {
@@ -60,7 +85,7 @@ export function getProductColumns(actions: {
       header: "Reference",
       cell: ({ row }) => (
         <code className="text-sm bg-muted px-1.5 py-0.5 rounded">
-          {row.getValue("reference")}
+          {highlightText(String(row.getValue("reference")), q)}
         </code>
       ),
     },
@@ -103,9 +128,7 @@ export function getProductColumns(actions: {
       cell: ({ row }) => {
         const status = row.getValue("status") as string;
         return (
-          <Badge variant={statusVariant[status] ?? "outline"}>
-            {status}
-          </Badge>
+          <Badge variant={statusVariant[status] ?? "outline"}>{status}</Badge>
         );
       },
     },
@@ -121,8 +144,18 @@ export function getProductColumns(actions: {
         </Button>
       ),
       cell: ({ row }) => {
-        const date = row.getValue("createdAt") as string;
-        return new Date(date).toLocaleDateString();
+        const product = row.original;
+        const label = `Created: ${format(new Date(product.createdAt), "MMM d yyyy, HH:mm")} | Updated: ${format(new Date(product.updatedAt), "MMM d yyyy, HH:mm")}`;
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-default border-b border-dotted border-muted-foreground/50">
+                {new Date(product.createdAt).toLocaleDateString()}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">{label}</TooltipContent>
+          </Tooltip>
+        );
       },
     },
     {
