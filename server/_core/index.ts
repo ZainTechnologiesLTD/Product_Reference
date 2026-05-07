@@ -25,6 +25,16 @@ function isPortAvailable(port: number): Promise<boolean> {
 }
 
 async function findAvailablePort(startPort: number = 3000): Promise<number> {
+  if (process.env.NODE_ENV === "production") {
+    if (await isPortAvailable(startPort)) {
+      return startPort;
+    }
+
+    throw new Error(
+      `Configured production port ${startPort} is already in use. Stop the conflicting process or change PORT and Caddy together.`
+    );
+  }
+
   for (let port = startPort; port < startPort + 20; port++) {
     if (await isPortAvailable(port)) {
       return port;
@@ -37,10 +47,22 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
 
+  // Trust reverse proxy (needed so secure cookies / req.secure work behind TLS-terminating proxy)
+  app.set("trust proxy", 1);
+
   // Security headers
+  // HSTS / COOP / Origin-Agent-Cluster require a "trustworthy" origin (HTTPS or localhost).
+  // When serving over plain HTTP on a LAN IP (e.g. http://192.168.x.x:3000) these headers
+  // either get ignored with warnings or, in HSTS's case, cause the browser to force-upgrade
+  // asset requests to https://, which then fail with ERR_SSL_PROTOCOL_ERROR.
+  const isProd = process.env.NODE_ENV === "production";
   app.use(
     helmet({
-      contentSecurityPolicy: process.env.NODE_ENV === "production" ? undefined : false,
+      contentSecurityPolicy: isProd ? undefined : false,
+      hsts: isProd,
+      crossOriginOpenerPolicy: isProd,
+      crossOriginEmbedderPolicy: isProd,
+      originAgentCluster: isProd,
     })
   );
 
